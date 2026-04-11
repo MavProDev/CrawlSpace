@@ -41,33 +41,6 @@ def _atomic_write(path: Path, data: dict) -> None:
         raise
 
 
-# ---------------------------------------------------------------------------
-# Theme helper
-# ---------------------------------------------------------------------------
-
-
-def apply_theme(name: str) -> None:
-    """Swap the live colour palette to the named theme (falls back to 'coral')."""
-    from PyQt6.QtGui import QColor
-
-    from crawlspace.constants import C, THEMES
-
-    theme = THEMES.get(name) or THEMES.get("coral", {})
-    if not theme:
-        return
-
-    accent = theme.get("accent")
-    accent_light = theme.get("accent_light")
-
-    if accent is not None:
-        C["coral"] = QColor(*accent) if isinstance(accent, tuple) else QColor(accent)
-    if accent_light is not None:
-        C["coral_light"] = (
-            QColor(*accent_light)
-            if isinstance(accent_light, tuple)
-            else QColor(accent_light)
-        )
-
 
 # ---------------------------------------------------------------------------
 # ConfigManager

@@ -20,6 +20,8 @@ class ProcessInfo:
     children: list[int] = field(default_factory=list)
     orphan_score: float = 0.0
     listening_ports: list[int] = field(default_factory=list)
+    is_orphan: bool = True
+    parent_chain: str = ""
 
     @property
     def cmdline_str(self) -> str:
