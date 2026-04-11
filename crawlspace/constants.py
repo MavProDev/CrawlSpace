@@ -3,7 +3,16 @@ CrawlSpace — constants.py
 Single source of truth for all visual and behavioral constants.
 """
 
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QFont
+
+
+def make_font(spec: tuple) -> QFont:
+    """Create a QFont from a FONTS tuple (family, size, weight_string)."""
+    family, size, weight_str = spec
+    font = QFont(family, size)
+    if weight_str == "Bold":
+        font.setBold(True)
+    return font
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -85,7 +94,7 @@ PROCESS_PATTERNS = {
         "express", "fastify", "hono", "koa",
     ],
     "devtool": [
-        "claude", "codex", "cursor", "copilot", "aider", "cline",
+        "cursor", "copilot", "aider", "cline",
     ],
     "infrastructure": [
         "docker", "docker-compose", "kubectl", "ngrok", "localtunnel", "cloudflared",
@@ -97,6 +106,17 @@ PROCESS_PATTERNS = {
         "dotnet",
     ],
 }
+
+# ---------------------------------------------------------------------------
+# Processes to exclude (active tools / shells — not ghost processes)
+# ---------------------------------------------------------------------------
+
+EXCLUDE_PROCESSES = [
+    "claude", "codex", "claude-code",
+    "bash", "sh", "cmd", "powershell", "pwsh",
+    "conhost", "windowsterminal", "wt",
+    "code",  # VS Code itself (not its spawned servers)
+]
 
 # ---------------------------------------------------------------------------
 # Common dev ports

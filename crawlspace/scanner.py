@@ -1,17 +1,30 @@
-import os
+"""CrawlSpace — background process scanner with orphan detection."""
+
 import time
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
 from crawlspace.process_info import ProcessInfo
 from crawlspace.categories import classify_process, is_dev_process
+from crawlspace.constants import EXCLUDE_PROCESSES
 from crawlspace.utils.platform import self_pid
 
-class ScannerThread(QThread):
-    processes_updated = pyqtSignal(list)      # list[ProcessInfo]
-    process_arrived = pyqtSignal(object)      # ProcessInfo
-    process_departed = pyqtSignal(object)     # ProcessInfo
+# Names that indicate a live coding session (shell / AI tool)
+_SESSION_NAMES = {
+    "claude", "codex", "claude-code", "bash", "sh", "zsh",
+    "cmd", "powershell", "pwsh", "conhost", "windowsterminal", "wt",
+    "code", "cursor", "windsurf",
+}
 
-    def __init__(self, interval_ms: int = 5000, whitelist_paths: list[str] | None = None):
+
+class ScannerThread(QThread):
+    """Background thread that scans for dev processes and detects orphans."""
+
+    processes_updated = pyqtSignal(list)
+    process_arrived = pyqtSignal(object)
+    process_departed = pyqtSignal(object)
+
+    def __init__(self, interval_ms: int = 5000,
+                 whitelist_paths: list[str] | None = None) -> None:
         super().__init__()
         self._interval_ms = interval_ms
         self._running = True
@@ -20,7 +33,7 @@ class ScannerThread(QThread):
         self._whitelist_paths = [p.lower() for p in (whitelist_paths or [])]
         self._self_pid = self_pid()
 
-    def run(self):
+    def run(self) -> None:
         while self._running:
             try:
                 processes = self._scan()
@@ -37,7 +50,11 @@ class ScannerThread(QThread):
                 self._previous_map = {p.pid: p for p in processes}
             except Exception as e:
                 print(f"[Scanner] Error: {e}")
-            self.msleep(self._interval_ms)
+            # Sleep in small chunks so stop() is responsive
+            for _ in range(self._interval_ms // 100):
+                if not self._running:
+                    return
+                self.msleep(100)
 
     def _scan(self) -> list[ProcessInfo]:
         results = []
@@ -54,6 +71,13 @@ class ScannerThread(QThread):
                 cmdline = info.get('cmdline') or []
                 if not is_dev_process(name, cmdline):
                     continue
+                name_lower = name.lower().replace(".exe", "")
+                if name_lower in EXCLUDE_PROCESSES:
+                    continue
+                # Skip CrawlSpace's own processes
+                cmdline_joined = " ".join(cmdline).lower()
+                if "crawlspace" in cmdline_joined:
+                    continue
                 exe_path = info.get('exe', '') or ''
                 if self._is_whitelisted(exe_path):
                     continue
@@ -62,9 +86,11 @@ class ScannerThread(QThread):
                 mem_info = info.get('memory_info')
                 memory_mb = round(mem_info.rss / (1024 * 1024), 1) if mem_info else 0.0
                 cpu = info.get('cpu_percent', 0.0) or 0.0
+                ppid = info.get('ppid', 0) or 0
+
                 pi = ProcessInfo(
                     pid=pid, name=name, cmdline=cmdline,
-                    ppid=info.get('ppid', 0) or 0,
+                    ppid=ppid,
                     cpu_percent=cpu, memory_mb=memory_mb,
                     create_time=create_time, uptime_seconds=uptime,
                     uptime_human=self._format_uptime(uptime),
@@ -73,15 +99,67 @@ class ScannerThread(QThread):
                     category=classify_process(name, cmdline),
                     exe_path=exe_path,
                 )
+
+                # Detect orphan status by walking the parent chain
+                is_orphan, parent_chain = self._check_orphan(pid, ppid)
+                pi.is_orphan = is_orphan
+                pi.parent_chain = parent_chain
+
+                # Detect listening ports (quick check, skip on error)
+                try:
+                    conns = psutil.Process(pid).net_connections(kind='inet')
+                    pi.listening_ports = sorted({
+                        c.laddr.port for c in conns
+                        if c.status == 'LISTEN' and c.laddr
+                    })
+                except (psutil.NoSuchProcess, psutil.AccessDenied,
+                        psutil.ZombieProcess):
+                    pass
+
                 uptime_hours = uptime / 3600
                 cpu_idle = 1.0 if cpu < 0.1 else 0.0
                 pi.orphan_score = round(uptime_hours * 0.4 + cpu_idle * 0.3, 2)
                 results.append(pi)
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            except (psutil.NoSuchProcess, psutil.AccessDenied,
+                    psutil.ZombieProcess):
                 continue
             except Exception:
                 continue
         return results
+
+    @staticmethod
+    def _check_orphan(pid: int, ppid: int) -> tuple[bool, str]:
+        """Walk parent chain to determine if process is orphaned.
+
+        Returns (is_orphan, parent_description).
+        - Orphan: parent process is dead or chain leads nowhere
+        - Active: parent chain leads to a live shell/claude session
+        """
+        chain = []
+        current_ppid = ppid
+        visited = {pid}
+        for _ in range(10):  # max depth to avoid loops
+            if current_ppid in visited or current_ppid <= 1:
+                break
+            visited.add(current_ppid)
+            try:
+                parent = psutil.Process(current_ppid)
+                pname = parent.name().lower().replace(".exe", "")
+                chain.append(pname)
+                if pname in _SESSION_NAMES:
+                    # Parent is a live session — NOT orphaned
+                    return False, " > ".join(reversed(chain))
+                current_ppid = parent.ppid()
+            except (psutil.NoSuchProcess, psutil.AccessDenied,
+                    psutil.ZombieProcess):
+                # Parent is dead — this IS an orphan
+                return True, "parent exited"
+            except Exception:
+                return True, "unknown"
+        # Chain exhausted without finding a session — treat as orphan
+        if chain:
+            return True, " > ".join(reversed(chain))
+        return True, "no parent"
 
     def _is_whitelisted(self, exe_path: str) -> bool:
         if not exe_path:
@@ -104,15 +182,15 @@ class ScannerThread(QThread):
             h = int((seconds % 86400) // 3600)
             return f"{d}d {h}h"
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
 
-    def set_interval(self, ms: int):
+    def set_interval(self, ms: int) -> None:
         self._interval_ms = ms
 
-    def set_whitelist(self, paths: list[str]):
+    def set_whitelist(self, paths: list[str]) -> None:
         self._whitelist_paths = [p.lower() for p in paths]
 
     def scan_once(self) -> list[ProcessInfo]:
-        """Synchronous single scan for testing or immediate refresh."""
+        """Synchronous single scan for immediate refresh."""
         return self._scan()

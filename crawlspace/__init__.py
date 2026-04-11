@@ -1,3 +1,3 @@
 """CrawlSpace — Hunting zombies in your dev environment."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

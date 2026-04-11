@@ -12,19 +12,15 @@ from crawlspace.utils.colors import badge_color
 def _find_icon() -> Path:
     """Find crawldad.ico, handling both dev and PyInstaller-bundled paths."""
     import sys
-    # PyInstaller bundles to sys._MEIPASS
     if hasattr(sys, '_MEIPASS'):
         p = Path(sys._MEIPASS) / "assets" / "crawldad.ico"
         if p.exists():
             return p
-    # Development: relative to this file
     p = Path(__file__).parent.parent.parent / "assets" / "crawldad.ico"
-    if p.exists():
-        return p
-    return p  # return anyway, QIcon handles missing gracefully
+    return p
 
 
-def make_tray(app, crawlspace_app, config, scanner):
+def make_tray(app, crawlspace_app, config, scanner, main_window=None, notch=None):
     """Create and configure the system tray icon."""
     icon_path = _find_icon()
     base_icon = QIcon(str(icon_path.resolve()))
@@ -32,7 +28,7 @@ def make_tray(app, crawlspace_app, config, scanner):
 
     _state = {"count": 0, "base_pixmap": base_icon.pixmap(32, 32)}
 
-    def _update_badge(processes):
+    def _update_badge(processes: list) -> None:
         count = len(processes)
         _state["count"] = count
         pix = QPixmap(_state["base_pixmap"])
@@ -54,7 +50,8 @@ def make_tray(app, crawlspace_app, config, scanner):
             p.end()
         tray.setIcon(QIcon(pix))
         suffix = "es" if count != 1 else ""
-        tray.setToolTip(f"CrawlSpace \u2014 {count} dev process{suffix}")
+        total_mb = sum(proc.memory_mb for proc in processes)
+        tray.setToolTip(f"CrawlSpace \u2014 {count} ghost process{suffix} | {total_mb:.0f} MB")
 
     scanner.processes_updated.connect(_update_badge)
 
@@ -65,21 +62,22 @@ def make_tray(app, crawlspace_app, config, scanner):
         "padding:4px;font-size:12px;}"
         "QMenu::item:selected{background:#d97757;}"
     )
-    menu.addAction("Open CrawlSpace")  # placeholder for main window
+
+    if main_window:
+        menu.addAction("Open CrawlSpace").triggered.connect(main_window.show_and_raise)
+
     menu.addSeparator()
-    menu.addAction("Quick Scan").triggered.connect(
-        lambda: scanner.scan_once()
-    )
+    menu.addAction("Quick Scan").triggered.connect(lambda: scanner.scan_once())
 
     # Quick Kill submenu
     _quick_kill_menu = menu.addMenu("Quick Kill")
     _quick_kill_menu.setStyleSheet(menu.styleSheet())
 
-    def _update_quick_kill(processes):
+    def _update_quick_kill(processes: list) -> None:
         _quick_kill_menu.clear()
-        sorted_procs = sorted(processes, key=lambda p: p.orphan_score, reverse=True)[:3]
+        sorted_procs = sorted(processes, key=lambda pr: pr.orphan_score, reverse=True)[:5]
         if not sorted_procs:
-            act = _quick_kill_menu.addAction("No processes")
+            act = _quick_kill_menu.addAction("No ghost processes")
             act.setEnabled(False)
             return
         for proc in sorted_procs:
@@ -88,28 +86,48 @@ def make_tray(app, crawlspace_app, config, scanner):
             )
             pid = proc.pid
             action.triggered.connect(
-                lambda checked, p=pid: _do_quick_kill(p)
+                lambda checked, target=pid: _do_quick_kill(target)
             )
 
-    def _do_quick_kill(pid):
+    def _do_quick_kill(pid: int) -> None:
         crawlspace_app.do_kill(pid)
         scanner.scan_once()
 
     scanner.processes_updated.connect(_update_quick_kill)
 
+    # Notch toggle
+    if notch:
+        menu.addSeparator()
+        act_notch = menu.addAction("Show Notch")
+        act_notch.setCheckable(True)
+        act_notch.setChecked(config.get("overlay_enabled", False))
+
+        def _toggle_notch(checked: bool) -> None:
+            config.set("overlay_enabled", checked)
+            if checked:
+                notch.show_notch()
+            else:
+                notch.hide_notch()
+
+        act_notch.triggered.connect(_toggle_notch)
+
     menu.addSeparator()
-    menu.addAction("Settings...")  # placeholder
-    menu.addSeparator()
-    menu.addAction("Quit").triggered.connect(app.quit)
+    def _quit() -> None:
+        import os
+        scanner.stop()
+        scanner.wait(500)
+        app.quit()
+        os._exit(0)
+
+    menu.addAction("Quit").triggered.connect(_quit)
 
     tray.setContextMenu(menu)
     tray.setToolTip("CrawlSpace \u2014 scanning...")
 
-    # Left-click opens main window (placeholder)
-    tray.activated.connect(
-        lambda reason: None  # will wire to main_window.show() in Phase 4
-        if reason == QSystemTrayIcon.ActivationReason.Trigger else None
-    )
+    def _on_activated(reason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger and main_window:
+            main_window.show_and_raise()
 
+    tray.activated.connect(_on_activated)
     tray.show()
     return tray
