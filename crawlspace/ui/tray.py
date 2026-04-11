@@ -9,13 +9,24 @@ from crawlspace.constants import C
 from crawlspace.utils.colors import badge_color
 
 
+def _find_icon() -> Path:
+    """Find crawldad.ico, handling both dev and PyInstaller-bundled paths."""
+    import sys
+    # PyInstaller bundles to sys._MEIPASS
+    if hasattr(sys, '_MEIPASS'):
+        p = Path(sys._MEIPASS) / "assets" / "crawldad.ico"
+        if p.exists():
+            return p
+    # Development: relative to this file
+    p = Path(__file__).parent.parent.parent / "assets" / "crawldad.ico"
+    if p.exists():
+        return p
+    return p  # return anyway, QIcon handles missing gracefully
+
+
 def make_tray(app, crawlspace_app, config, scanner):
     """Create and configure the system tray icon."""
-    # Load icon
-    icon_path = Path(__file__).parent.parent.parent / "assets" / "crawldad.ico"
-    if not icon_path.exists():
-        # Fallback: try relative to package
-        icon_path = Path(__file__).parent.parent / ".." / "assets" / "crawldad.ico"
+    icon_path = _find_icon()
     base_icon = QIcon(str(icon_path.resolve()))
     tray = QSystemTrayIcon(base_icon, app)
 
