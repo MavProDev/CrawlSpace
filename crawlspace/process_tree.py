@@ -16,18 +16,26 @@ def build_tree(processes: list[ProcessInfo]) -> dict[int, list[int]]:
 
 
 def resolve_tree(pid: int, tree: dict[int, list[int]]) -> list[int]:
-    """Resolve all descendants of a PID (iterative, depth-first)."""
-    result = []
-    stack = list(tree.get(pid, []))
-    visited = set()
-    while stack:
-        child = stack.pop()
-        if child in visited:
-            continue
-        visited.add(child)
-        result.append(child)
-        stack.extend(tree.get(child, []))
-    return result
+    """Resolve all descendants of a PID in kill-safe order (deepest first).
+
+    Returns descendants with deepest children first, so a killer iterating
+    this list will terminate leaves before their parents — avoiding orphan
+    re-parenting to init.
+    """
+    from collections import deque
+    depths: dict[int, int] = {}
+    queue = deque([(pid, 0)])
+    visited = {pid}
+    while queue:
+        current, depth = queue.popleft()
+        for child in tree.get(current, []):
+            if child in visited:
+                continue
+            visited.add(child)
+            depths[child] = depth + 1
+            queue.append((child, depth + 1))
+    # Sort descendants by depth desc (deepest first)
+    return sorted(depths.keys(), key=lambda p: -depths[p])
 
 
 def get_roots(processes: list[ProcessInfo]) -> list[ProcessInfo]:

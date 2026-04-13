@@ -105,20 +105,13 @@ class ScannerThread(QThread):
                 pi.is_orphan = is_orphan
                 pi.parent_chain = parent_chain
 
-                # Detect listening ports (quick check, skip on error)
-                try:
-                    conns = psutil.Process(pid).net_connections(kind='inet')
-                    pi.listening_ports = sorted({
-                        c.laddr.port for c in conns
-                        if c.status == 'LISTEN' and c.laddr
-                    })
-                except (psutil.NoSuchProcess, psutil.AccessDenied,
-                        psutil.ZombieProcess):
-                    pass
-
+                # Orphan score — higher = more likely a dead ghost
+                # Actual orphans (parent dead) always rank above active session procs.
+                # Within each group, longer uptime + lower CPU = higher ghost score.
                 uptime_hours = uptime / 3600
-                cpu_idle = 1.0 if cpu < 0.1 else 0.0
-                pi.orphan_score = round(uptime_hours * 0.4 + cpu_idle * 0.3, 2)
+                cpu_activity = min(cpu / 100.0, 1.0)
+                base = uptime_hours * 0.5 + (1.0 - cpu_activity) * 0.3
+                pi.orphan_score = round(base + (10.0 if is_orphan else 0.0), 2)
                 results.append(pi)
             except (psutil.NoSuchProcess, psutil.AccessDenied,
                     psutil.ZombieProcess):

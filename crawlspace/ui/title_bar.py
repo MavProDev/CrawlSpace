@@ -2,7 +2,7 @@
 
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QPainter, QFont
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QToolButton
 
 from crawlspace.constants import C, FONTS, make_font
 from crawlspace.character.crawldad import draw_crawldad, eye_shift
@@ -80,39 +80,42 @@ class TitleBar(QWidget):
 
         layout.addStretch()
 
-        # Window control buttons — use ID selectors to beat global QPushButton QSS
-        def _wctrl(text: str, name: str, tooltip: str, color: str,
-                   hover_bg: str, hover_color: str) -> QPushButton:
-            btn = QPushButton(text)
-            btn.setObjectName(name)
+        # Window control buttons — QToolButton avoids global QPushButton QSS entirely
+        def _wctrl(text: str, tooltip: str, color: str,
+                   hover_bg: str, hover_color: str) -> QToolButton:
+            btn = QToolButton()
+            btn.setText(text)
             btn.setToolTip(tooltip)
             btn.setFixedSize(32, 32)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(
-                f"#{name} {{ background: transparent; border: none;"
+                f"QToolButton {{ background: transparent; border: none;"
                 f"  color: {color}; font-size: 16px; font-weight: bold; }}"
-                f"#{name}:hover {{ background: {hover_bg}; color: {hover_color};"
+                f"QToolButton:hover {{ background: {hover_bg}; color: {hover_color};"
                 f"  border-radius: 4px; }}"
             )
             return btn
 
-        self._btn_min = _wctrl("\u2014", "tb_min", "Minimize",
-                               C['text_hi'].name(), C['card_bg'].name(), "#ffffff")
+        self._btn_min = _wctrl("\u2014", "Minimize", "#ffffff",
+                               C['card_bg'].name(), "#ffffff")
         self._btn_min.clicked.connect(self.minimize_clicked.emit)
         layout.addWidget(self._btn_min)
 
-        self._btn_settings = _wctrl("\u2699", "tb_set", "Settings",
-                                    C['text_hi'].name(), C['card_bg'].name(), C['coral'].name())
+        self._btn_settings = _wctrl("\u2699", "Settings", "#ffffff",
+                                    C['card_bg'].name(), C['coral'].name())
         self._btn_settings.clicked.connect(self.settings_clicked.emit)
         layout.addWidget(self._btn_settings)
 
-        self._btn_close = _wctrl("\u2715", "tb_close", "Close to tray",
-                                 C['text_hi'].name(), "#3a1515", C['red'].name())
+        self._btn_close = _wctrl("\u2715", "Close to tray", "#ffffff",
+                                 "#3a1515", C['red'].name())
         self._btn_close.clicked.connect(self.close_clicked.emit)
         layout.addWidget(self._btn_close)
 
-        # Connect animation to repaint Craw only
-        anim.frame_tick.connect(self._craw.update)
+        # Connect animation to repaint Craw only (skip when hidden)
+        def _tick_craw() -> None:
+            if self._craw.isVisible():
+                self._craw.update()
+        anim.frame_tick.connect(_tick_craw)
 
     # ── Native window drag ───────────────────────────────────
 

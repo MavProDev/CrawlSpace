@@ -22,12 +22,23 @@ from crawlspace.ui.overlay import Notch
 
 def main() -> None:
     """Application entry point."""
+    # Set AppUserModelID so Windows taskbar shows our icon, not Python's
+    import ctypes
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MavPro.CrawlSpace.1")
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
     if not acquire_lock():
         print("CrawlSpace is already running.")
         sys.exit(1)
+
+    # Set app icon (taskbar + window icon) to Craw
+    from pathlib import Path
+    from PyQt6.QtGui import QIcon
+    ico = Path(__file__).parent.parent / "assets" / "crawldad.ico"
+    if ico.exists():
+        app.setWindowIcon(QIcon(str(ico)))
 
     config = ConfigManager()
     apply_theme(config.get("color_theme", "coral"))

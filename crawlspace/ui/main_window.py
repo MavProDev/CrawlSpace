@@ -31,6 +31,7 @@ class MainWindow(QWidget):
         self._app = app_ctrl
         self._config = config
         self._processes: list[ProcessInfo] = []
+        self._pid_items: dict[int, QTreeWidgetItem] = {}
 
         self.setWindowTitle("CrawlSpace")
         self.setWindowFlags(
@@ -174,87 +175,86 @@ class MainWindow(QWidget):
     def on_processes_updated(self, processes: list[ProcessInfo]) -> None:
         """Called by scanner with updated process list."""
         self._processes = processes
-        self._rebuild_table()
+        # Skip rendering if window is hidden — saves all the work
+        if not self.isVisible():
+            return
+        self._refresh_table()
 
     def _on_toggle_active(self, checked: bool) -> None:
         self._show_active = checked
-        self._rebuild_table()
-
-    def _rebuild_table(self) -> None:
-        self._table.setSortingEnabled(False)
+        # Toggle changes visible set — do a full rebuild once
+        self._pid_items.clear()
         self._table.clear()
+        self._refresh_table()
+
+    def _refresh_table(self) -> None:
+        """Diff-based table update — reuses existing items instead of rebuilding."""
         procs = self._processes
         orphans = [p for p in procs if p.is_orphan]
-        active = [p for p in procs if not p.is_orphan]
+        active_list = [p for p in procs if not p.is_orphan]
 
-        # Status text always shows full counts
-        if not orphans and not active:
+        # Status bar
+        if not orphans and not active_list:
             self._status.setText("No ghost processes found. You're clean!")
             self._status.setStyleSheet(f"color: {C['green'].name()};")
         else:
             parts = []
             if orphans:
                 parts.append(f"{len(orphans)} orphaned")
-            if active:
-                parts.append(f"{len(active)} active (hidden)")
+            if active_list:
+                suffix = "" if self._show_active else " (hidden)"
+                parts.append(f"{len(active_list)} active{suffix}")
             total_mb = sum(p.memory_mb for p in procs)
             self._status.setText(f"{' + '.join(parts)}  |  {total_mb:.0f} MB")
             self._status.setStyleSheet(
                 f"color: {C['coral'].name() if orphans else C['text_md'].name()};"
             )
 
-        # Show orphans always, active only if toggled on
-        for p in sorted(orphans, key=lambda x: x.uptime_seconds, reverse=True):
-            self._add_row(p)
+        # Build visible set
+        visible = orphans[:]
         if self._show_active:
-            for p in sorted(active, key=lambda x: x.uptime_seconds, reverse=True):
-                self._add_row(p)
+            visible.extend(active_list)
 
+        # Diff: which PIDs are new, which are gone, which need update
+        new_pids = {p.pid for p in visible}
+        old_pids = set(self._pid_items.keys())
+
+        # Remove departed
+        for dead_pid in old_pids - new_pids:
+            item = self._pid_items.pop(dead_pid, None)
+            if item:
+                idx = self._table.indexOfTopLevelItem(item)
+                if idx >= 0:
+                    self._table.takeTopLevelItem(idx)
+
+        # Sort visible by uptime desc for stable ordering
+        visible.sort(key=lambda x: (0 if x.is_orphan else 1, -x.uptime_seconds))
+
+        # Add/update
+        self._table.setSortingEnabled(False)
+        for p in visible:
+            existing = self._pid_items.get(p.pid)
+            if existing is None:
+                self._create_row(p)
+            else:
+                self._update_row(existing, p)
+        self._table.setSortingEnabled(True)
+
+        # Footer
         self._footer_label.setText(f"Last scan: {time.strftime('%H:%M:%S')}")
         self._btn_kill_all.setEnabled(len(orphans) > 0)
         self._btn_kill_all.setText(
             f"Kill All Orphans ({len(orphans)})" if orphans else "No Orphans"
         )
-        self._table.setSortingEnabled(True)
 
-    def _add_row(self, p: ProcessInfo) -> None:
+    def _create_row(self, p: ProcessInfo) -> None:
+        """Create a new table row for a process."""
         item = QTreeWidgetItem()
-
-        # Status column
-        if p.is_orphan:
-            item.setText(0, "Orphan")
-            item.setForeground(0, C["coral"])
-            item.setToolTip(0, f"Parent exited — safe to kill\n{p.parent_chain}")
-        else:
-            item.setText(0, "Active")
-            item.setForeground(0, C["green"])
-            item.setToolTip(0, f"Part of a live session\n{p.parent_chain}")
-
-        item.setFont(0, make_font(FONTS["tiny_bold"]))
-
-        # Name
-        item.setText(1, p.name)
-        item.setFont(1, make_font(FONTS["body"]))
-
-        # Command (short)
-        item.setText(2, p.cmdline_short)
-        item.setToolTip(2, p.cmdline_str)
-        item.setFont(2, make_font(FONTS["caption"]))
-        item.setForeground(2, C["text_md"])
-
-        # Uptime
-        item.setText(3, p.uptime_human)
-        item.setForeground(3, uptime_color(p.uptime_seconds))
-
-        # Memory
-        item.setText(4, f"{p.memory_mb:.0f} MB")
-
-        # Store PID
-        item.setData(0, Qt.ItemDataRole.UserRole, p.pid)
-
+        self._update_row(item, p)
         self._table.addTopLevelItem(item)
+        self._pid_items[p.pid] = item
 
-        # Kill button — red for orphans, grey for active
+        # Kill button
         kill_btn = QPushButton("Kill")
         kill_btn.setFixedSize(50, 22)
         kill_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -267,8 +267,49 @@ class MainWindow(QWidget):
                 f"border: 1px solid {C['divider'].name()}; border-radius: 3px;"
             )
             kill_btn.setToolTip("This process may be part of a live Claude session")
-        kill_btn.clicked.connect(lambda _, pid=p.pid, orphan=p.is_orphan: self._kill_one(pid, orphan))
+        pid = p.pid
+        orphan = p.is_orphan
+        kill_btn.clicked.connect(lambda _, pid=pid, orphan=orphan: self._kill_one(pid, orphan))
         self._table.setItemWidget(item, 5, kill_btn)
+
+    def _update_row(self, item: QTreeWidgetItem, p: ProcessInfo) -> None:
+        """Update an existing row's cells in place (cheap, no widget churn)."""
+        # Status
+        if p.is_orphan:
+            if item.text(0) != "Orphan":
+                item.setText(0, "Orphan")
+                item.setForeground(0, C["coral"])
+                item.setFont(0, make_font(FONTS["tiny_bold"]))
+                item.setToolTip(0, f"Parent exited — safe to kill\n{p.parent_chain}")
+        else:
+            if item.text(0) != "Active":
+                item.setText(0, "Active")
+                item.setForeground(0, C["green"])
+                item.setFont(0, make_font(FONTS["tiny_bold"]))
+                item.setToolTip(0, f"Part of a live session\n{p.parent_chain}")
+
+        # Name (rarely changes)
+        if item.text(1) != p.name:
+            item.setText(1, p.name)
+            item.setFont(1, make_font(FONTS["body"]))
+
+        # Command
+        if item.text(2) != p.cmdline_short:
+            item.setText(2, p.cmdline_short)
+            item.setToolTip(2, p.cmdline_str)
+            item.setFont(2, make_font(FONTS["caption"]))
+            item.setForeground(2, C["text_md"])
+
+        # Uptime (changes every scan — just set text + color)
+        item.setText(3, p.uptime_human)
+        item.setForeground(3, uptime_color(p.uptime_seconds))
+
+        # Memory
+        item.setText(4, f"{p.memory_mb:.0f} MB")
+
+        # PID stored in UserRole (only on first create)
+        if item.data(0, Qt.ItemDataRole.UserRole) is None:
+            item.setData(0, Qt.ItemDataRole.UserRole, p.pid)
 
     # ── Click behavior ───────────────────────────────────────
 
@@ -364,6 +405,19 @@ class MainWindow(QWidget):
     def closeEvent(self, event) -> None:
         self._close_to_tray()
         event.ignore()
+
+    def showEvent(self, event) -> None:
+        """When window becomes visible, resume normal animation FPS."""
+        self._anim.set_active()
+        # Force a refresh so the window shows current data immediately
+        if self._processes:
+            self._refresh_table()
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:
+        """When window hides, drop animation to idle FPS to save CPU."""
+        self._anim.set_idle()
+        super().hideEvent(event)
 
     def show_and_raise(self) -> None:
         """Show, raise, and activate."""

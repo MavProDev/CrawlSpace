@@ -5,7 +5,7 @@ import platform
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QLabel, QPushButton, QCheckBox, QComboBox, QSpinBox, QSlider,
-    QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView,
+    QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView, QToolButton,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPainter, QPainterPath, QBrush, QPen
@@ -65,14 +65,14 @@ class SettingsDialog(QDialog):
         header_layout.addWidget(title)
         header_layout.addStretch()
 
-        close_btn = QPushButton("\u2715")
-        close_btn.setObjectName("settings_close")
+        close_btn = QToolButton()
+        close_btn.setText("\u2715")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet(
-            f"#settings_close {{ color: {C['text_hi'].name()}; background: transparent;"
+            f"QToolButton {{ color: #ffffff; background: transparent;"
             f"  border: none; font-size: 16px; font-weight: bold; }}"
-            f"#settings_close:hover {{ color: {C['red'].name()}; background: #3a1515;"
+            f"QToolButton:hover {{ color: {C['red'].name()}; background: #3a1515;"
             f"  border-radius: 4px; }}"
         )
         close_btn.clicked.connect(self.close)
