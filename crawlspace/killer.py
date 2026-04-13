@@ -24,9 +24,9 @@ def kill_process(pid: int, timeout: int = 3) -> tuple[bool, str]:
 
 
 def kill_tree(pid: int, tree: dict[int, list[int]], timeout: int = 3) -> tuple[int, int, list[str]]:
-    """Kill a process and all descendants. Children first (bottom-up)."""
-    descendants = resolve_tree(pid, tree)
-    all_pids = list(reversed(descendants)) + [pid]
+    """Kill a process and all descendants. Deepest children first, then parent."""
+    descendants = resolve_tree(pid, tree)  # already in deepest-first order
+    all_pids = descendants + [pid]
     killed = 0
     failed = 0
     messages = []

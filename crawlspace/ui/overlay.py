@@ -49,7 +49,8 @@ class Notch(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._apply_size()
-        anim.frame_tick.connect(self.update)
+        # Only repaint when visible — avoid wasted cycles
+        anim.frame_tick.connect(self._tick)
 
         # Restore position
         lx = config.get("overlay_x", -1)
@@ -69,6 +70,11 @@ class Notch(QWidget):
         """Update process count and memory."""
         self._count = count
         self._total_mb = total_mb
+
+    def _tick(self) -> None:
+        """Animation frame — only repaint if visible."""
+        if self.isVisible():
+            self.update()
 
     def show_notch(self) -> None:
         """Show the notch."""
