@@ -19,6 +19,28 @@ from crawlspace.ui.title_bar import TitleBar
 from PyQt6.QtWidgets import QCheckBox
 
 
+def _project_from_cwd(cwd: str) -> str:
+    """Derive a short project label from a working directory path.
+
+    Returns the last meaningful path segment, or empty string if the cwd
+    is missing / a system path / not inside a project-looking directory.
+    """
+    if not cwd:
+        return ""
+    import os
+    norm = cwd.replace("\\", "/").rstrip("/")
+    parts = [p for p in norm.split("/") if p]
+    if not parts:
+        return ""
+    # Skip common system roots
+    skip = {"c:", "d:", "windows", "system32", "program files", "program files (x86)",
+            "users", "appdata", "roaming", "local", "temp"}
+    candidate = parts[-1]
+    if candidate.lower() in skip or len(candidate) > 24:
+        return ""
+    return candidate
+
+
 class MainWindow(QWidget):
     """Lean CrawlSpace window — see ghost processes, kill them, done."""
 
@@ -288,15 +310,19 @@ class MainWindow(QWidget):
                 item.setFont(0, make_font(FONTS["tiny_bold"]))
                 item.setToolTip(0, f"Part of a live session\n{p.parent_chain}")
 
-        # Name (rarely changes)
+        # Name (rarely changes) — tooltip shows cwd/project origin
         if item.text(1) != p.name:
             item.setText(1, p.name)
             item.setFont(1, make_font(FONTS["body"]))
+        tooltip = f"cwd: {p.cwd}" if p.cwd else "cwd: (unknown)"
+        item.setToolTip(1, tooltip)
 
-        # Command
-        if item.text(2) != p.cmdline_short:
-            item.setText(2, p.cmdline_short)
-            item.setToolTip(2, p.cmdline_str)
+        # Command — show project folder name prefix if we have a cwd
+        proj = _project_from_cwd(p.cwd)
+        cmd_display = f"[{proj}]  {p.cmdline_short}" if proj else p.cmdline_short
+        if item.text(2) != cmd_display:
+            item.setText(2, cmd_display)
+            item.setToolTip(2, f"{p.cmdline_str}\n\ncwd: {p.cwd}" if p.cwd else p.cmdline_str)
             item.setFont(2, make_font(FONTS["caption"]))
             item.setForeground(2, C["text_md"])
 
@@ -320,11 +346,10 @@ class MainWindow(QWidget):
         proc = next((p for p in self._processes if p.pid == pid), None)
         if not proc:
             return
-        # Show full command + origin info in the info bar
         status = "ORPHAN (safe to kill)" if proc.is_orphan else "ACTIVE SESSION"
-        ports = f" | Ports: {', '.join(str(x) for x in proc.listening_ports)}" if proc.listening_ports else ""
+        cwd_line = f"cwd: {proc.cwd}" if proc.cwd else "cwd: (unknown)"
         self._info_bar.setText(
-            f"[{status}]  PID {proc.pid}  |  {proc.exe_path}{ports}\n"
+            f"[{status}]  PID {proc.pid}  |  {cwd_line}\n"
             f"$ {proc.cmdline_str}"
         )
         self._info_bar.setVisible(True)

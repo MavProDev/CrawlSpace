@@ -22,6 +22,7 @@ class ProcessInfo:
     listening_ports: list[int] = field(default_factory=list)
     is_orphan: bool = True
     parent_chain: str = ""
+    cwd: str = ""
 
     @property
     def cmdline_str(self) -> str:

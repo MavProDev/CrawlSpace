@@ -32,6 +32,10 @@ class ScannerThread(QThread):
         self._previous_map: dict[int, ProcessInfo] = {}
         self._whitelist_paths = [p.lower() for p in (whitelist_paths or [])]
         self._self_pid = self_pid()
+        # Cache cwd per PID — a process's cwd rarely changes, so fetch once
+        # and reuse on subsequent scans. Keyed by (pid, create_time) to avoid
+        # PID recycling giving us stale paths.
+        self._cwd_cache: dict[tuple[int, float], str] = {}
 
     def run(self) -> None:
         while self._running:
@@ -48,6 +52,10 @@ class ScannerThread(QThread):
                         self.process_departed.emit(old)
                 self._previous_pids = current_pids
                 self._previous_map = {p.pid: p for p in processes}
+                # Prune cwd cache for processes that vanished
+                live_keys = {(p.pid, p.create_time) for p in processes}
+                self._cwd_cache = {k: v for k, v in self._cwd_cache.items()
+                                   if k in live_keys}
             except Exception as e:
                 print(f"[Scanner] Error: {e}")
             # Sleep in small chunks so stop() is responsive
@@ -104,6 +112,19 @@ class ScannerThread(QThread):
                 is_orphan, parent_chain = self._check_orphan(pid, ppid)
                 pi.is_orphan = is_orphan
                 pi.parent_chain = parent_chain
+
+                # Working directory — cached per (pid, create_time) to avoid
+                # per-scan syscall while surviving PID recycling
+                cache_key = (pid, create_time)
+                cwd = self._cwd_cache.get(cache_key)
+                if cwd is None:
+                    try:
+                        cwd = psutil.Process(pid).cwd() or ""
+                    except (psutil.NoSuchProcess, psutil.AccessDenied,
+                            psutil.ZombieProcess):
+                        cwd = ""
+                    self._cwd_cache[cache_key] = cwd
+                pi.cwd = cwd
 
                 # Orphan score — higher = more likely a dead ghost
                 # Actual orphans (parent dead) always rank above active session procs.
