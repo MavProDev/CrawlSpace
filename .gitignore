@@ -12,3 +12,9 @@ build/
 *.log
 data/
 .crawlspace/
+
+# Claude Code internal artifacts — never commit
+.superpowers/
+.claude/
+docs/superpowers/
+docs/handoffs/
